@@ -16,8 +16,9 @@ Data sources:
     - Token prices: DefiLlama / CoinGecko
 
 Usage:
-    python main.py              # Fetch live data (Dune + DefiLlama)
-    python main.py --sample     # Use generated sample data (for testing)
+    python main.py                          # Fetch live data (Dune + DefiLlama)
+    python main.py --csv data/allium.csv    # Supply+volume from Allium CSV, prices from DefiLlama
+    python main.py --sample                 # Use generated sample data (for testing)
 """
 
 import argparse
@@ -25,7 +26,7 @@ import os
 import sys
 
 from config import CHAINS, GROUPS, MIN_CHAINS
-from data_fetcher import fetch_all_data
+from data_fetcher import fetch_all_data, fetch_prices_only, load_allium_csv
 from strategy import BacktestResult, backtest, build_panel, format_metrics
 from visualize import plot_all, plot_summary_comparison, plot_velocity_by_chain
 
@@ -48,6 +49,8 @@ def generate_sample_if_needed():
 
 def main():
     parser = argparse.ArgumentParser(description="Stablecoin Velocity L/S Strategy")
+    parser.add_argument("--csv", type=str, default=None,
+                        help="Path to Allium CSV file (supply+volume from CSV, prices from DefiLlama)")
     parser.add_argument("--sample", action="store_true",
                         help="Use sample data instead of live API")
     parser.add_argument("--alpha", type=float, default=0.005,
@@ -56,7 +59,13 @@ def main():
                         help="Volume source: 'dex' (DefiLlama DEX) or 'transfer' (Dune stablecoin transfers)")
     args = parser.parse_args()
 
-    vol_label = "Stablecoin Transfer Volume (Dune)" if args.volume_source == "transfer" else "DEX Volume (DefiLlama)"
+    if args.csv:
+        vol_label = f"Allium CSV ({args.csv})"
+    elif args.volume_source == "transfer":
+        vol_label = "Stablecoin Transfer Volume (Dune)"
+    else:
+        vol_label = "DEX Volume (DefiLlama)"
+
     print("=" * 60)
     print("  Stablecoin Velocity L/S Strategy Backtest")
     print(f"  Volume source: {vol_label}")
@@ -64,7 +73,12 @@ def main():
     print()
 
     # ── Step 1: Get data ─────────────────────────────────────────────────
-    if args.sample:
+    if args.csv:
+        print(f"Step 1: Loading supply + volume from CSV: {args.csv}\n")
+        all_data = load_allium_csv(args.csv)
+        print(f"\nStep 1b: Fetching token prices from DefiLlama...\n")
+        all_data = fetch_prices_only(all_data)
+    elif args.sample:
         from sample_data import generate_sample_data
         print(f"Step 1: Generating sample data (alpha={args.alpha})...\n")
         generate_sample_data(velocity_alpha=args.alpha)

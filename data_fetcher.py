@@ -404,6 +404,98 @@ def fetch_stablecoin_transfer_volume_all(
     return result
 
 
+# ── Load Allium CSV ──────────────────────────────────────────────────────────
+
+# Map Allium chain names (lowercase) → config Chain names
+_ALLIUM_CHAIN_MAP: dict[str, str] = {}
+for _c in CHAINS:
+    _ALLIUM_CHAIN_MAP[_c.name.lower()] = _c.name
+    _ALLIUM_CHAIN_MAP[_c.defillama_id.lower()] = _c.name
+    if _c.dune_chain_id:
+        _ALLIUM_CHAIN_MAP[_c.dune_chain_id.lower()] = _c.name
+# Extra aliases
+_ALLIUM_CHAIN_MAP.update({
+    "avalanche_c": "Avalanche",
+    "avalanche c": "Avalanche",
+    "bnb": "BSC",
+    "bnb chain": "BSC",
+    "binance": "BSC",
+    "polygon pos": "Polygon",
+    "zksync": "zkSync Era",
+    "zksync era": "zkSync Era",
+    "zksync_era": "zkSync Era",
+})
+
+_CHAIN_BY_NAME: dict[str, Chain] = {c.name: c for c in CHAINS}
+
+
+def load_allium_csv(
+    csv_path: str,
+    chains: list[Chain] | None = None,
+) -> dict:
+    """
+    Load supply + volume from an Allium CSV file.
+    Prices are NOT in the CSV — caller must fetch them separately.
+
+    Expected columns: date, chain, avg_circulating_supply_usd, agg_adjusted_volume_usd
+    Returns same format as fetch_all_data().
+    """
+    if chains is None:
+        chains = CHAINS
+
+    wanted = {c.name for c in chains}
+    df = pd.read_csv(csv_path)
+    df["date"] = pd.to_datetime(df["date"])
+
+    # Map chain names
+    unmapped = set()
+    result = {}
+
+    for raw_chain, group in df.groupby("chain"):
+        canonical = _ALLIUM_CHAIN_MAP.get(str(raw_chain).lower().strip())
+        if not canonical or canonical not in wanted:
+            unmapped.add(raw_chain)
+            continue
+
+        group = group.set_index("date").sort_index()
+        group = group[~group.index.duplicated(keep="last")]
+
+        supply = pd.DataFrame({"supply": group["avg_circulating_supply_usd"].astype(float)})
+        volume = pd.DataFrame({"volume": group["agg_adjusted_volume_usd"].astype(float)})
+
+        result[canonical] = {
+            "supply": supply,
+            "volume": volume,
+            "price": pd.DataFrame(),  # filled later
+            "chain": _CHAIN_BY_NAME[canonical],
+        }
+
+    if unmapped:
+        print(f"  Warning: unmapped chains in CSV: {', '.join(sorted(unmapped))}")
+
+    loaded = sorted(result.keys())
+    print(f"  Loaded {len(loaded)} chains from CSV: {', '.join(loaded)}")
+    return result
+
+
+def fetch_prices_only(
+    all_data: dict,
+) -> dict:
+    """Fetch only token prices for chains that already have supply+volume."""
+    total = len(all_data)
+    for i, (name, data) in enumerate(all_data.items(), 1):
+        chain = data["chain"]
+        print(f"  [{i}/{total}] Fetching price for {name}...")
+        price = fetch_token_price(chain)
+        data["price"] = price
+        p_days = len(price)
+        print(f"    -> price: {p_days}d")
+        if p_days == 0:
+            print(f"    !! No price data for {name}, will be excluded")
+        time.sleep(REQUEST_DELAY)
+    return all_data
+
+
 # ── Fetch everything ─────────────────────────────────────────────────────────
 
 def fetch_all_data(
