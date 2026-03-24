@@ -8,7 +8,7 @@ from datetime import datetime
 import pandas as pd
 import requests
 
-from config import CHAINS, DUNE_API_KEY, DUNE_QUERY_ID, Chain
+from config import CHAINS, CG_API_KEY, DUNE_API_KEY, DUNE_QUERY_ID, Chain
 
 CACHE_DIR = "cache"
 STABLECOIN_API = "https://stablecoins.llama.fi"
@@ -23,18 +23,30 @@ DUNE_MAX_POLL = 300  # max seconds to wait for query execution
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get(url: str, retries: int = 3) -> dict | None:
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": "velocity-strategy/1.0",
+    "Accept": "application/json",
+})
+
+
+def _get(url: str, headers: dict | None = None, retries: int = 3) -> dict | None:
     for attempt in range(retries):
         try:
-            resp = requests.get(url, timeout=30)
+            resp = _SESSION.get(url, headers=headers, timeout=30)
             if resp.status_code == 200:
                 return resp.json()
-            if resp.status_code == 429:
+            if resp.status_code in (429, 503):
                 wait = 2 ** (attempt + 1)
                 print(f"  Rate limited, waiting {wait}s...")
                 time.sleep(wait)
                 continue
             print(f"  HTTP {resp.status_code} for {url}")
+            if resp.status_code in (400, 403):
+                # Might be transient; retry once more with backoff
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
             return None
         except requests.RequestException as e:
             wait = 2 ** attempt
@@ -160,14 +172,9 @@ def fetch_token_price(chain: Chain) -> pd.DataFrame:
     return _records_to_df(records)
 
 
-def _fetch_price_defillama(chain: Chain) -> list:
-    coin_id = f"coingecko:{chain.coingecko_id}"
-    url = f"{COINS_API}/chart/{coin_id}?period=1d&span=5000"
-    data = _get(url)
-    if not data or "coins" not in data:
-        return []
-
-    coin_data = data["coins"].get(coin_id, {})
+def _parse_defillama_chart(data: dict, coin_id: str) -> list:
+    """Parse price records from DefiLlama chart response."""
+    coin_data = data.get("coins", {}).get(coin_id, {})
     prices = coin_data.get("prices", [])
     if not prices:
         return []
@@ -188,13 +195,49 @@ def _fetch_price_defillama(chain: Chain) -> list:
     return records
 
 
+def _fetch_price_defillama(chain: Chain) -> list:
+    coin_id = f"coingecko:{chain.coingecko_id}"
+
+    # Try with explicit start timestamp (Jan 1 2020) — more reliable
+    start_ts = 1577836800  # 2020-01-01
+    end_ts = int(time.time())
+    span = min((end_ts - start_ts) // 86400, 3000)
+
+    url = f"{COINS_API}/chart/{coin_id}?start={start_ts}&span={span}&period=1d"
+    data = _get(url)
+    if data and "coins" in data:
+        records = _parse_defillama_chart(data, coin_id)
+        if records:
+            return records
+
+    # Fallback: try without span/period params
+    url = f"{COINS_API}/chart/{coin_id}?start={start_ts}"
+    data = _get(url)
+    if data and "coins" in data:
+        records = _parse_defillama_chart(data, coin_id)
+        if records:
+            return records
+
+    return []
+
+
 def _fetch_price_coingecko(chain: Chain) -> list:
-    """Fallback: CoinGecko free API."""
+    """Fallback: CoinGecko API (free demo key required since 2024)."""
+    # CoinGecko Pro vs Demo base URL
+    if CG_API_KEY:
+        base = "https://pro-api.coingecko.com" if CG_API_KEY.startswith("CG-") else "https://api.coingecko.com"
+        headers = {"x-cg-demo-api-key": CG_API_KEY}
+    else:
+        base = "https://api.coingecko.com"
+        headers = None
+        print("  Warning: CG_API_KEY not set — CoinGecko may reject requests (HTTP 401)")
+        print("  Get a free key at https://www.coingecko.com/en/api/pricing")
+
     url = (
-        f"https://api.coingecko.com/api/v3/coins/{chain.coingecko_id}"
+        f"{base}/api/v3/coins/{chain.coingecko_id}"
         "/market_chart?vs_currency=usd&days=max&interval=daily"
     )
-    data = _get(url)
+    data = _get(url, headers=headers)
     if not data or "prices" not in data:
         return []
 

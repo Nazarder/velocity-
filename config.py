@@ -77,3 +77,7 @@ MIN_SUPPLY_USD    = 1_000_000  # Ignore chains with < $1M stablecoin supply
 
 DUNE_API_KEY  = os.environ.get("DUNE_API_KEY", "")
 DUNE_QUERY_ID = os.environ.get("DUNE_QUERY_ID", "6899878")  # Stablecoin transfer volume query
+
+# ── CoinGecko ─────────────────────────────────────────────────────────────
+
+CG_API_KEY = os.environ.get("CG_API_KEY", "")  # Free demo key from coingecko.com
