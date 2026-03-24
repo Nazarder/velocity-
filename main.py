@@ -21,7 +21,7 @@ import sys
 from config import CHAINS, GROUPS, MIN_CHAINS
 from data_fetcher import fetch_all_data
 from strategy import BacktestResult, backtest, build_panel, format_metrics
-from visualize import plot_all, plot_summary_comparison
+from visualize import plot_all, plot_summary_comparison, plot_velocity_by_chain
 
 
 def has_cached_data() -> bool:
@@ -93,6 +93,11 @@ def main():
     print(f"  {', '.join(available_chains)}")
     print(f"  Date range: {supply.index[0].date()} -> {supply.index[-1].date()}")
     print(f"  Total days: {len(supply)}")
+    print()
+
+    # ── Step 2b: Velocity by chain chart (Allium-style) ─────────────────
+    print("Step 2b: Generating velocity-by-chain chart...\n")
+    plot_velocity_by_chain(supply, volume)
     print()
 
     # ── Step 3: Run backtests for each hypothesis ────────────────────────

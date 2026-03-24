@@ -141,6 +141,64 @@ def plot_velocity_timeseries(result: BacktestResult, filename: str | None = None
     print(f"  Saved: {path}")
 
 
+def plot_velocity_by_chain(
+    supply: pd.DataFrame,
+    volume: pd.DataFrame,
+    velocity_window: int = 30,
+    min_supply: float = 1_000_000,
+    filename: str = "velocity_by_chain.png",
+):
+    """
+    Allium-style chart: Stablecoin Velocity by Blockchain over time.
+    Velocity = rolling_sum(volume) / rolling_mean(supply), resampled monthly.
+    """
+    _ensure_dir()
+
+    roll_vol = volume.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).sum()
+    roll_sup = supply.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).mean()
+    roll_sup = roll_sup.where(roll_sup >= min_supply)
+    vel = (roll_vol / roll_sup).replace([np.inf, -np.inf], np.nan)
+
+    # Monthly resample
+    vel_m = vel.resample("MS").mean().dropna(how="all")
+    if vel_m.empty:
+        return
+
+    # Sort chains by latest velocity (descending)
+    latest = vel_m.iloc[-1].dropna().sort_values(ascending=False)
+    sorted_chains = list(latest.index)
+
+    fig, ax = plt.subplots(figsize=(16, 8))
+
+    colors = plt.cm.tab20(np.linspace(0, 1, max(len(sorted_chains), 1)))
+    for i, chain in enumerate(sorted_chains):
+        series = vel_m[chain].dropna()
+        if series.empty:
+            continue
+        ax.plot(series.index, series.values, label=f"{chain}  {latest[chain]:.2f}",
+                linewidth=1.4, color=colors[i % len(colors)], alpha=0.85)
+
+    ax.set_title("Adjusted Stablecoin Velocity by Blockchain", fontsize=14)
+    ax.set_ylabel("Velocity (Transfer Volume / Supply)")
+    ax.set_xlabel("")
+    ax.grid(True, alpha=0.2)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("Jan %Y"))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    fig.autofmt_xdate()
+
+    ax.legend(
+        bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7,
+        frameon=True, framealpha=0.9, ncol=1,
+        title="Chain  Velocity", title_fontsize=8,
+    )
+
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, filename)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_all(result: BacktestResult):
     """Generate all plots for a backtest result."""
     plot_cumulative_pnl(result)
