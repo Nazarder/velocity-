@@ -66,4 +66,4 @@ MIN_SUPPLY_USD    = 1_000_000  # Ignore chains with < $1M stablecoin supply
 # ── Dune Analytics ─────────────────────────────────────────────────────────
 
 DUNE_API_KEY  = os.environ.get("DUNE_API_KEY", "")
-DUNE_QUERY_ID = os.environ.get("DUNE_QUERY_ID", "")  # Saved query ID for stablecoin transfer volume
+DUNE_QUERY_ID = os.environ.get("DUNE_QUERY_ID", "6899878")  # Stablecoin transfer volume query

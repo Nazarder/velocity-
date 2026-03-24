@@ -1,4 +1,4 @@
-"""Fetch stablecoin supply, DEX volume, token prices, and stablecoin transfer volume."""
+"""Fetch stablecoin supply, on-chain transfer volume (Dune), and token prices."""
 
 import json
 import os

@@ -3,14 +3,20 @@
 Stablecoin Velocity Long/Short Strategy
 ========================================
 
-Hypothesis: blockchains with higher stablecoin velocity (DEX volume / supply)
-should see their native tokens outperform those with lower velocity.
+Hypothesis: blockchains with higher stablecoin velocity
+(on-chain transfer volume / stablecoin supply) should see their native tokens
+outperform those with lower velocity.
 
 Strategy: long top-tercile velocity chains, short bottom-tercile.
 Tested across multiple groupings (L1, L2, EVM, non-EVM, all).
 
+Data sources:
+    - Stablecoin transfer volume: Dune Analytics (query 6899878)
+    - Stablecoin supply: DefiLlama
+    - Token prices: DefiLlama / CoinGecko
+
 Usage:
-    python main.py              # Fetch live data from DefiLlama
+    python main.py              # Fetch live data (Dune + DefiLlama)
     python main.py --sample     # Use generated sample data (for testing)
 """
 
