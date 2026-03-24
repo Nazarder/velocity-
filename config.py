@@ -2,7 +2,17 @@
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List
+
+# Load .env file if present
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for line in _env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
 
 
 @dataclass
