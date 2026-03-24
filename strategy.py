@@ -27,12 +27,18 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ── Build aligned data ──────────────────────────────────────────────────────
 
-def build_panel(all_data: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_panel(
+    all_data: dict,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     """
     Align supply, volume, and price data into three DataFrames
     with common daily index and chain columns.
+
+    If pre-computed velocity is available (e.g. from Allium CSV),
+    returns it as the fourth element; otherwise returns None.
     """
     supply_frames, volume_frames, price_frames = {}, {}, {}
+    velocity_frames = {}
 
     for name, d in all_data.items():
         s, v, p = d["supply"], d["volume"], d["price"]
@@ -41,6 +47,11 @@ def build_panel(all_data: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
         supply_frames[name] = s["supply"] if "supply" in s.columns else s.iloc[:, 0]
         volume_frames[name] = v["volume"] if "volume" in v.columns else v.iloc[:, 0]
         price_frames[name] = p["price"] if "price" in p.columns else p.iloc[:, 0]
+
+        # Pre-computed velocity (optional)
+        vel = d.get("velocity")
+        if vel is not None and not vel.empty:
+            velocity_frames[name] = vel["velocity"] if "velocity" in vel.columns else vel.iloc[:, 0]
 
     if not supply_frames:
         raise ValueError("No chains with complete data")
@@ -57,7 +68,17 @@ def build_panel(all_data: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     volume = volume.reindex(common_idx).fillna(0)
     price = price.reindex(common_idx).ffill().bfill()
 
-    return supply, volume, price
+    # Build pre-computed velocity panel if available
+    precomputed_velocity = None
+    if velocity_frames:
+        vel_df = pd.DataFrame(velocity_frames)
+        # Only use chains that are in the aligned panel
+        common_cols = [c for c in supply.columns if c in vel_df.columns]
+        if common_cols:
+            precomputed_velocity = vel_df[common_cols].reindex(common_idx).ffill()
+            precomputed_velocity = precomputed_velocity.replace([np.inf, -np.inf], np.nan)
+
+    return supply, volume, price, precomputed_velocity
 
 
 # ── Velocity calculation ────────────────────────────────────────────────────
@@ -131,9 +152,13 @@ def backtest(
     rebalance_freq: int = REBALANCE_FREQ,
     top_quantile: float = TOP_QUANTILE,
     min_chains: int = MIN_CHAINS,
+    precomputed_velocity: pd.DataFrame | None = None,
 ) -> BacktestResult | None:
     """
     Run the velocity L/S backtest on a subset of chains.
+
+    If precomputed_velocity is provided, uses it directly instead of
+    recalculating from supply/volume.
 
     Returns None if not enough chains have data.
     """
@@ -151,8 +176,12 @@ def backtest(
     vol = volume[cols].copy()
     prc = price[cols].copy()
 
-    # Compute velocity
-    vel = compute_velocity(sup, vol, window=velocity_window)
+    # Use pre-computed velocity or calculate from supply/volume
+    if precomputed_velocity is not None:
+        vel_cols = [c for c in cols if c in precomputed_velocity.columns]
+        vel = precomputed_velocity[vel_cols].reindex(sup.index)
+    else:
+        vel = compute_velocity(sup, vol, window=velocity_window)
 
     # Daily returns of native tokens
     returns = prc.pct_change().fillna(0)

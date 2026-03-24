@@ -103,7 +103,7 @@ def main():
     # ── Step 2: Build aligned panel ──────────────────────────────────────
     print("\nStep 2: Building aligned data panel...\n")
     try:
-        supply, volume, price = build_panel(all_data)
+        supply, volume, price, precomputed_velocity = build_panel(all_data)
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -113,11 +113,13 @@ def main():
     print(f"  {', '.join(available_chains)}")
     print(f"  Date range: {supply.index[0].date()} -> {supply.index[-1].date()}")
     print(f"  Total days: {len(supply)}")
+    if precomputed_velocity is not None:
+        print(f"  Using pre-computed velocity from Allium CSV")
     print()
 
     # ── Step 2b: Velocity by chain chart (Allium-style) ─────────────────
     print("Step 2b: Generating velocity-by-chain chart...\n")
-    plot_velocity_by_chain(supply, volume)
+    plot_velocity_by_chain(supply, volume, precomputed_velocity=precomputed_velocity)
     print()
 
     # ── Step 3: Run backtests for each hypothesis ────────────────────────
@@ -140,6 +142,7 @@ def main():
             supply, volume, price,
             group_name=group_name,
             chain_filter=group_chains,
+            precomputed_velocity=precomputed_velocity,
         )
         results[group_name] = result
 

@@ -126,7 +126,7 @@ def plot_velocity_timeseries(result: BacktestResult, filename: str | None = None
         ax.plot(vel_w.index, vel_w[col], label=col, linewidth=1.2, alpha=0.8)
 
     ax.set_title(f"Stablecoin Velocity Over Time — {result.name}", fontsize=14)
-    ax.set_ylabel("Velocity (DEX Volume / Stablecoin Supply)")
+    ax.set_ylabel("Velocity (Transfer Volume / Stablecoin Supply)")
     ax.set_xlabel("Date")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -147,17 +147,21 @@ def plot_velocity_by_chain(
     velocity_window: int = 30,
     min_supply: float = 1_000_000,
     filename: str = "velocity_by_chain.png",
+    precomputed_velocity: pd.DataFrame | None = None,
 ):
     """
     Allium-style chart: Stablecoin Velocity by Blockchain over time.
-    Velocity = rolling_sum(volume) / rolling_mean(supply), resampled monthly.
+    Uses pre-computed velocity if available, otherwise calculates from supply/volume.
     """
     _ensure_dir()
 
-    roll_vol = volume.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).sum()
-    roll_sup = supply.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).mean()
-    roll_sup = roll_sup.where(roll_sup >= min_supply)
-    vel = (roll_vol / roll_sup).replace([np.inf, -np.inf], np.nan)
+    if precomputed_velocity is not None:
+        vel = precomputed_velocity.copy()
+    else:
+        roll_vol = volume.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).sum()
+        roll_sup = supply.rolling(velocity_window, min_periods=max(1, velocity_window // 2)).mean()
+        roll_sup = roll_sup.where(roll_sup >= min_supply)
+        vel = (roll_vol / roll_sup).replace([np.inf, -np.inf], np.nan)
 
     # Monthly resample
     vel_m = vel.resample("MS").mean().dropna(how="all")

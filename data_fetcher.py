@@ -434,11 +434,12 @@ def load_allium_csv(
     chains: list[Chain] | None = None,
 ) -> dict:
     """
-    Load supply + volume from an Allium CSV file.
+    Load supply, volume, and pre-computed velocity from an Allium CSV file.
     Prices are NOT in the CSV — caller must fetch them separately.
 
-    Expected columns: date, chain, avg_circulating_supply_usd, agg_adjusted_volume_usd
-    Returns same format as fetch_all_data().
+    Expected columns: date, chain, avg_circulating_supply_usd,
+                      agg_adjusted_volume_usd, adj_velocity
+    Returns same format as fetch_all_data(), with extra "velocity" key per chain.
     """
     if chains is None:
         chains = CHAINS
@@ -463,9 +464,13 @@ def load_allium_csv(
         supply = pd.DataFrame({"supply": group["avg_circulating_supply_usd"].astype(float)})
         volume = pd.DataFrame({"volume": group["agg_adjusted_volume_usd"].astype(float)})
 
+        # Pre-computed velocity from Allium
+        velocity = pd.DataFrame({"velocity": group["adj_velocity"].astype(float)})
+
         result[canonical] = {
             "supply": supply,
             "volume": volume,
+            "velocity": velocity,
             "price": pd.DataFrame(),  # filled later
             "chain": _CHAIN_BY_NAME[canonical],
         }
