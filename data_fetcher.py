@@ -1,4 +1,4 @@
-"""Fetch stablecoin supply, DEX volume, and token prices from DefiLlama."""
+"""Fetch stablecoin supply, DEX volume, token prices, and stablecoin transfer volume."""
 
 import json
 import os
@@ -8,14 +8,17 @@ from datetime import datetime
 import pandas as pd
 import requests
 
-from config import CHAINS, Chain
+from config import CHAINS, DUNE_API_KEY, DUNE_QUERY_ID, Chain
 
 CACHE_DIR = "cache"
 STABLECOIN_API = "https://stablecoins.llama.fi"
 LLAMA_API = "https://api.llama.fi"
 COINS_API = "https://coins.llama.fi"
+DUNE_API = "https://api.dune.com/api/v1"
 
 REQUEST_DELAY = 0.4  # seconds between API calls
+DUNE_POLL_INTERVAL = 2  # seconds between status polls
+DUNE_MAX_POLL = 300  # max seconds to wait for query execution
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -204,15 +207,188 @@ def _fetch_price_coingecko(chain: Chain) -> list:
     return records
 
 
+# ── Stablecoin transfer volume (Dune Analytics) ─────────────────────────────
+
+def _dune_headers() -> dict:
+    return {"X-Dune-API-Key": DUNE_API_KEY}
+
+
+def _dune_execute_query(query_id: str) -> str | None:
+    """Execute a saved Dune query. Returns execution_id or None."""
+    url = f"{DUNE_API}/query/{query_id}/execute"
+    try:
+        resp = requests.post(url, headers=_dune_headers(), timeout=30)
+        if resp.status_code == 200:
+            return resp.json().get("execution_id")
+        print(f"  Dune execute error: HTTP {resp.status_code}")
+        return None
+    except requests.RequestException as e:
+        print(f"  Dune execute error: {e}")
+        return None
+
+
+def _dune_wait_for_results(execution_id: str) -> list | None:
+    """Poll execution status, then fetch results."""
+    elapsed = 0
+    while elapsed < DUNE_MAX_POLL:
+        url = f"{DUNE_API}/execution/{execution_id}/status"
+        try:
+            resp = requests.get(url, headers=_dune_headers(), timeout=30)
+            if resp.status_code != 200:
+                print(f"  Dune status error: HTTP {resp.status_code}")
+                return None
+            state = resp.json().get("state")
+            if state == "QUERY_STATE_COMPLETED":
+                break
+            if state in ("QUERY_STATE_FAILED", "QUERY_STATE_CANCELLED",
+                         "QUERY_STATE_EXPIRED"):
+                print(f"  Dune query {state}")
+                return None
+        except requests.RequestException as e:
+            print(f"  Dune poll error: {e}")
+            return None
+        time.sleep(DUNE_POLL_INTERVAL)
+        elapsed += DUNE_POLL_INTERVAL
+    else:
+        print(f"  Dune query timed out after {DUNE_MAX_POLL}s")
+        return None
+
+    # Fetch results (paginated)
+    all_rows = []
+    url = f"{DUNE_API}/execution/{execution_id}/results"
+    offset = 0
+    limit = 32000
+    while True:
+        try:
+            resp = requests.get(
+                url, headers=_dune_headers(), timeout=60,
+                params={"limit": limit, "offset": offset},
+            )
+            if resp.status_code != 200:
+                print(f"  Dune results error: HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            rows = data.get("result", {}).get("rows", [])
+            all_rows.extend(rows)
+            if len(rows) < limit:
+                break
+            offset += limit
+        except requests.RequestException as e:
+            print(f"  Dune results error: {e}")
+            break
+
+    return all_rows if all_rows else None
+
+
+def fetch_stablecoin_transfer_volume_all(
+    chains: list[Chain] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Fetch daily stablecoin transfer volume for all chains via a single Dune query.
+    Returns {chain_name: DataFrame(date, transfer_volume)}.
+    """
+    if chains is None:
+        chains = CHAINS
+
+    # Build reverse map: dune_chain_id -> chain name
+    dune_to_name = {}
+    for c in chains:
+        if c.dune_chain_id:
+            dune_to_name[c.dune_chain_id] = c.name
+
+    # Check if all chains are already cached
+    all_cached = True
+    result = {}
+    for c in chains:
+        if not c.dune_chain_id:
+            continue
+        cache_key = f"stablecoin_vol_{c.dune_chain_id}"
+        cached = _load_cache(cache_key)
+        if cached is not None:
+            result[c.name] = _records_to_df(cached)
+        else:
+            all_cached = False
+
+    if all_cached and result:
+        print("  Stablecoin transfer volumes loaded from cache")
+        return result
+
+    # Execute Dune query
+    print(f"  Executing Dune query {DUNE_QUERY_ID}...")
+    execution_id = _dune_execute_query(DUNE_QUERY_ID)
+    if not execution_id:
+        return result  # return whatever was cached
+
+    print(f"  Waiting for Dune results (execution: {execution_id})...")
+    rows = _dune_wait_for_results(execution_id)
+    if not rows:
+        print("  No results from Dune query")
+        return result
+
+    print(f"  Got {len(rows)} rows from Dune")
+
+    # Group rows by blockchain
+    by_chain: dict[str, list] = {}
+    for row in rows:
+        blockchain = row.get("blockchain", "")
+        if blockchain not in dune_to_name:
+            continue
+        chain_name = dune_to_name[blockchain]
+        if chain_name not in by_chain:
+            by_chain[chain_name] = []
+
+        date_str = row.get("date", "")
+        # Dune returns ISO timestamps like "2024-01-01T00:00:00Z"
+        if "T" in str(date_str):
+            date_str = str(date_str).split("T")[0]
+
+        by_chain[chain_name].append({
+            "date": date_str,
+            "volume": float(row.get("transfer_volume", 0)),
+        })
+
+    # Cache and build DataFrames
+    for c in chains:
+        if not c.dune_chain_id:
+            continue
+        if c.name in by_chain:
+            records = by_chain[c.name]
+            cache_key = f"stablecoin_vol_{c.dune_chain_id}"
+            _save_cache(cache_key, records)
+            result[c.name] = _records_to_df(records)
+            print(f"    {c.name}: {len(records)} days")
+
+    return result
+
+
 # ── Fetch everything ─────────────────────────────────────────────────────────
 
-def fetch_all_data(chains: list[Chain] | None = None) -> dict:
+def fetch_all_data(
+    chains: list[Chain] | None = None,
+    volume_source: str = "transfer",
+) -> dict:
     """
     Fetch supply, volume, price for all chains.
+
+    volume_source: "transfer" = stablecoin transfer volume from Dune,
+                   "dex" = DEX trading volume from DefiLlama.
     Returns: {chain_name: {"supply": df, "volume": df, "price": df, "chain": Chain}}
     """
     if chains is None:
         chains = CHAINS
+
+    # Pre-fetch stablecoin transfer volumes from Dune (single query for all chains)
+    transfer_vols: dict[str, pd.DataFrame] = {}
+    use_dune = volume_source == "transfer" and DUNE_API_KEY and DUNE_QUERY_ID
+    if use_dune:
+        print("Fetching stablecoin transfer volumes from Dune Analytics...\n")
+        transfer_vols = fetch_stablecoin_transfer_volume_all(chains)
+        print()
+    elif volume_source == "transfer":
+        if not DUNE_API_KEY:
+            print("Warning: DUNE_API_KEY not set. Falling back to DEX volume.\n")
+        elif not DUNE_QUERY_ID:
+            print("Warning: DUNE_QUERY_ID not set. Falling back to DEX volume.\n")
 
     result = {}
     total = len(chains)
@@ -223,8 +399,12 @@ def fetch_all_data(chains: list[Chain] | None = None) -> dict:
         supply = fetch_stablecoin_supply(chain)
         time.sleep(REQUEST_DELAY)
 
-        volume = fetch_dex_volume(chain)
-        time.sleep(REQUEST_DELAY)
+        # Use Dune transfer volume if available, otherwise fall back to DEX volume
+        if use_dune and chain.name in transfer_vols:
+            volume = transfer_vols[chain.name]
+        else:
+            volume = fetch_dex_volume(chain)
+            time.sleep(REQUEST_DELAY)
 
         price = fetch_token_price(chain)
         time.sleep(REQUEST_DELAY)
@@ -239,7 +419,8 @@ def fetch_all_data(chains: list[Chain] | None = None) -> dict:
         s_days = len(supply)
         v_days = len(volume)
         p_days = len(price)
-        print(f"  -> supply: {s_days}d, volume: {v_days}d, price: {p_days}d")
+        vol_src = "dune" if (use_dune and chain.name in transfer_vols) else "dex"
+        print(f"  -> supply: {s_days}d, volume({vol_src}): {v_days}d, price: {p_days}d")
 
         if s_days == 0 or v_days == 0 or p_days == 0:
             print(f"  !! Missing data for {chain.name}, will be excluded")

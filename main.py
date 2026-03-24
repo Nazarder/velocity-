@@ -46,10 +46,14 @@ def main():
                         help="Use sample data instead of live API")
     parser.add_argument("--alpha", type=float, default=0.005,
                         help="Velocity signal strength in sample data (default: 0.02)")
+    parser.add_argument("--volume-source", choices=["dex", "transfer"], default="transfer",
+                        help="Volume source: 'dex' (DefiLlama DEX) or 'transfer' (Dune stablecoin transfers)")
     args = parser.parse_args()
 
+    vol_label = "Stablecoin Transfer Volume (Dune)" if args.volume_source == "transfer" else "DEX Volume (DefiLlama)"
     print("=" * 60)
     print("  Stablecoin Velocity L/S Strategy Backtest")
+    print(f"  Volume source: {vol_label}")
     print("=" * 60)
     print()
 
@@ -60,10 +64,10 @@ def main():
         generate_sample_data(velocity_alpha=args.alpha)
         print()
         print("Step 1b: Loading from cache...\n")
-        all_data = fetch_all_data()
+        all_data = fetch_all_data(volume_source="dex")  # sample data uses DEX volume cache
     else:
-        print("Step 1: Fetching data from DefiLlama...\n")
-        all_data = fetch_all_data()
+        print(f"Step 1: Fetching data (volume: {args.volume_source})...\n")
+        all_data = fetch_all_data(volume_source=args.volume_source)
 
         # Check if we got any data
         has_data = any(
@@ -74,7 +78,7 @@ def main():
             print("\n  !! No live data available (API unreachable).")
             print("  !! Falling back to sample data...\n")
             generate_sample_if_needed()
-            all_data = fetch_all_data()
+            all_data = fetch_all_data(volume_source="dex")
 
     # ── Step 2: Build aligned panel ──────────────────────────────────────
     print("\nStep 2: Building aligned data panel...\n")

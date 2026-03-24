@@ -1,7 +1,8 @@
 """
 Stablecoin Velocity Long/Short Strategy.
 
-Velocity = rolling DEX volume / rolling stablecoin supply
+Velocity = rolling volume / rolling stablecoin supply
+  Volume source: stablecoin transfer volume (Dune) or DEX volume (DefiLlama)
 Signal:  rank chains by velocity each rebalance period
 Trade:   long top-tercile native tokens, short bottom-tercile
 """
